@@ -4,17 +4,15 @@ services:
     image: python:3.11-slim
     container_name: kindle-audio-sync
     network_mode: "host"
-    ports:
-      - "8000:8000"
+    environment:
+      # ZimaOS will turn these into UI fields!
+      - ABS_URL=http://127.0.0.1:13378
+      - ABS_TOKEN=paste_your_token_here
     volumes:
-      # Maps your ZimaOS folders safely so data survives restarts
-      # IMPORTANT: Make sure you created the 'kindle-sync' folder in /DATA/AppData/
-      - /DATA/AppData/kindle-sync/config.json:/app/config.json
+      # We only need to map the audios folder now
       - /DATA/AppData/kindle-sync/audios:/app/audios
     working_dir: /app
-    # Downloads your script directly from your repo every time it starts, then runs it
     command: >
       sh -c "python -c \"import urllib.request; urllib.request.urlretrieve('https://raw.githubusercontent.com/fvelsg/srt-player-koreader/main/server.py', 'server.py')\" 
       && python -u server.py"
     restart: unless-stopped
-
