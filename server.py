@@ -17,6 +17,15 @@ CONFIG_FILE = "config.json"
 # 1. CONFIGURATION MANAGER
 # ========================================================
 def load_config():
+    # 1. Check Docker Environment Variables first
+    env_url = os.environ.get("ABS_URL")
+    env_token = os.environ.get("ABS_TOKEN")
+    
+    if env_url and env_token:
+        print("[!] Using configuration from Docker Environment Variables.")
+        return {"ABS_URL": env_url, "ABS_TOKEN": env_token}
+        
+    # 2. Fallback to config.json if not running in Docker with env vars
     if not os.path.exists(CONFIG_FILE):
         default_config = {
             "ABS_URL": "http://192.168.0.7:13378",
@@ -25,7 +34,7 @@ def load_config():
         with open(CONFIG_FILE, 'w') as f:
             json.dump(default_config, f, indent=4)
         print(f"\n[!] Created '{CONFIG_FILE}'.")
-        print(f"[!] Please open {CONFIG_FILE}, paste your API token, and restart this script.\n")
+        print(f"[!] Please open {CONFIG_FILE}, paste your API token, or set ENV variables.\n")
         return default_config
         
     with open(CONFIG_FILE, 'r') as f:
