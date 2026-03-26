@@ -1,0 +1,12 @@
+services:
+  kindle-audio-sync:
+    build: .
+    container_name: kindle-audio-sync
+    ports:
+      - "8000:8000"
+    volumes:
+      # Persists your downloaded Audiobookshelf parts
+      - ./audios:/app/audios
+      # Maps the config file to the host for easy editing
+      - ./config.json:/app/config.json
+    restart: unless-stopped
