@@ -1,0 +1,17 @@
+name: kindle-audio-server
+services:
+  kindle-audio-server:
+    image: python:3.11
+    container_name: kindle-audio-server
+    network_mode: host
+    environment:
+      - ABS_URL=http://192.168.0.3:13378
+      - ABS_TOKEN=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI5Yjk2NTI0MS04YmYyLTQ3N2EtYjczYi04NWJjMzU5M2NhYzUiLCJ1c2VybmFtZSI6InJlYWQtb25seSIsImlhdCI6MTc3NDE4MjU0N30.H7MhrV68pT869bAjKGaxsWU2eiCUBPE1L7cjWzBbQ9I
+    volumes:
+      - /DATA/AppData/kindle-sync/audios:/app/audios
+    working_dir: /app
+    command:
+      - /bin/bash
+      - -c
+      - "curl -sO https://raw.githubusercontent.com/fvelsg/srt-player-koreader/main/server.py && python -u server.py"
+    restart: unless-stopped
