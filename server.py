@@ -105,7 +105,7 @@ class AudioHandler(http.server.SimpleHTTPRequestHandler):
                 </head>
                 <body>
                     <div class="container">
-                        <h2>🎧 Kindle Audio Sync</h2>
+                        <h2>🎧 Pimba Kindle Audio Sync</h2>
                         
                         <div class="radio-group">
                             <input type="radio" id="src_local" name="source" value="local" checked>
