@@ -8,6 +8,7 @@ import shutil
 import zipfile
 import mimetypes
 from urllib.parse import urlparse, parse_qs
+from bs4 import BeautifulSoup  # Added from your script
 
 PORT = 8000
 AUDIO_DIR = "audios"
@@ -48,8 +49,81 @@ if not os.path.exists(AUDIO_DIR):
     os.makedirs(AUDIO_DIR)
     print(f"[*] Created '{AUDIO_DIR}' folder for local files.")
 
+
 # ========================================================
-# 2. STATE MANAGER
+# 2. EPUB TO SRT PROCESSOR LOGIC
+# ========================================================
+def time_to_srt(time_string):
+    """Converts EPUB SMIL time formats to standard SRT timestamp format."""
+    time_string = time_string.replace('s', '').strip()
+    if ':' in time_string:
+        parts = time_string.split(':')
+        if len(parts) == 3:
+            h, m, s = float(parts[0]), float(parts[1]), float(parts[2])
+        else:
+            h, m, s = 0, float(parts[0]), float(parts[1])
+    else:
+        h, m = 0, 0
+        s = float(time_string)
+    
+    # Calculate milliseconds
+    total_ms = int((h * 3600 + m * 60 + s) * 1000)
+    hours = total_ms // 3600000
+    minutes = (total_ms % 3600000) // 60000
+    seconds = (total_ms % 60000) // 1000
+    milliseconds = total_ms % 1000
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d},{milliseconds:03d}"
+
+def convert_epub_to_srt(epub_path):
+    """Reads the EPUB, extracts subtitles, and returns the SRT file as a string."""
+    srt_content = []
+    
+    with zipfile.ZipFile(epub_path, 'r') as epub:
+        # Find all the SMIL synchronization files
+        smil_files = [f for f in epub.namelist() if f.endswith('.smil')]
+        smil_files.sort() # Ensure they are processed in chronological order
+        
+        if not smil_files:
+            raise Exception("No SMIL Media Overlay files found in this EPUB.")
+
+        sub_index = 1
+        for smil_file in smil_files:
+            smil_data = epub.read(smil_file)
+            smil_soup = BeautifulSoup(smil_data, 'xml')
+            
+            # Every <par> tag represents one synchronized text/audio fragment
+            for par in smil_soup.find_all('par'):
+                text_node = par.find('text')
+                audio_node = par.find('audio')
+                
+                if text_node and audio_node:
+                    start_time = time_to_srt(audio_node.get('clipBegin', '0s'))
+                    end_time = time_to_srt(audio_node.get('clipEnd', '0s'))
+                    
+                    src = text_node.get('src', '')
+                    if '#' in src:
+                        html_file, element_id = src.split('#')
+                        
+                        base_dir = os.path.dirname(smil_file)
+                        html_path = os.path.normpath(os.path.join(base_dir, html_file)).replace('\\', '/')
+                        
+                        try:
+                            html_data = epub.read(html_path)
+                            html_soup = BeautifulSoup(html_data, 'html.parser')
+                            target_element = html_soup.find(id=element_id)
+                            
+                            if target_element:
+                                text_content = target_element.get_text(strip=True)
+                                srt_content.append(f"{sub_index}\n{start_time} --> {end_time}\n{text_content}\n")
+                                sub_index += 1
+                        except KeyError:
+                            pass # File not found in zip, skip gracefully
+
+    return "\n".join(srt_content)
+
+
+# ========================================================
+# 3. STATE MANAGER & HTTP HANDLER
 # ========================================================
 state = {
     "browser": {"time": 0.0, "duration": 0.0, "status": "pause", "speed": 1.0},
@@ -59,6 +133,52 @@ state = {
 class AudioHandler(http.server.SimpleHTTPRequestHandler):
     def log_message(self, format, *args):
         pass
+
+    def do_POST(self):
+        """Handle File Uploads (for the EPUB to SRT converter)"""
+        parsed = urlparse(self.path)
+        
+        if parsed.path == '/upload_epub':
+            try:
+                qs = parse_qs(parsed.query)
+                filename = qs.get('filename', ['book.epub'])[0]
+                content_length = int(self.headers.get('Content-Length', 0))
+                
+                if content_length == 0:
+                    self.send_error(400, "Empty payload")
+                    return
+                    
+                file_data = self.rfile.read(content_length)
+                
+                # Save uploaded file temporarily
+                temp_epub_path = f"temp_{filename}"
+                with open(temp_epub_path, 'wb') as f:
+                    f.write(file_data)
+                    
+                # Process EPUB to extract SRT
+                srt_string = convert_epub_to_srt(temp_epub_path)
+                
+                # Clean up temp file
+                if os.path.exists(temp_epub_path):
+                    os.remove(temp_epub_path)
+                    
+                # Send the generated SRT back to the client as a direct download
+                self.send_response(200)
+                self.send_header('Content-type', 'application/x-subrip')
+                safe_filename = filename.replace('.epub', '') + '.srt'
+                self.send_header('Content-Disposition', f'attachment; filename="{safe_filename}"')
+                self.end_headers()
+                
+                self.wfile.write(srt_string.encode('utf-8'))
+                
+            except Exception as e:
+                print(f"[ERROR] Failed EPUB processing: {e}")
+                self.send_error(500, f"Error processing EPUB: {str(e)}")
+                # Ensure cleanup on failure
+                if 'temp_epub_path' in locals() and os.path.exists(temp_epub_path):
+                    os.remove(temp_epub_path)
+        else:
+            self.send_error(404, "Not Found")
 
     def do_GET(self):
         global state
@@ -81,7 +201,7 @@ class AudioHandler(http.server.SimpleHTTPRequestHandler):
                     <style>
                         body { text-align: center; margin-top: 20px; font-family: sans-serif; background-color: #eef2f5; color: #333; }
                         .container { background: white; padding: 25px; border-radius: 12px; box-shadow: 0 8px 16px rgba(0,0,0,0.1); display: inline-block; min-width: 550px; max-width: 800px; }
-                        select, button { padding: 12px; font-size: 16px; margin: 8px 0; border-radius: 8px; border: 1px solid #ccc; cursor: pointer; width: 100%; box-sizing: border-box; }
+                        select, button, input[type="file"] { padding: 12px; font-size: 16px; margin: 8px 0; border-radius: 8px; border: 1px solid #ccc; cursor: pointer; width: 100%; box-sizing: border-box; }
                         button { background-color: #007bff; color: white; border: none; font-weight: bold; transition: 0.2s; }
                         button:hover { background-color: #0056b3; }
                         .radio-group { margin-bottom: 20px; font-size: 18px; font-weight: bold; background: #f8f9fa; padding: 15px; border-radius: 8px;}
@@ -101,12 +221,22 @@ class AudioHandler(http.server.SimpleHTTPRequestHandler):
                         
                         .sub-controls { background: #fff; padding: 15px; border-radius: 8px; margin-top: 15px; border: 1px solid #ddd; display: none; }
                         .sub-controls label { font-weight: bold; display: block; margin-top: 10px; margin-bottom: 5px; text-align: left; font-size: 14px; color: #555;}
+                        
+                        /* Styles for EPUB Tools Section */
+                        .epub-tools { background: #e2e8f0; border: 1px dashed #94a3b8; }
                     </style>
                 </head>
                 <body>
                     <div class="container">
                         <h2>🎧 Pimba Kindle Audio Sync</h2>
                         
+                        <div class="section epub-tools">
+                            <h3 style="margin-top: 0; margin-bottom: 10px; color: #334155;">📖 Extract SRT from EPUB</h3>
+                            <input type="file" id="epub_upload" accept=".epub" style="background: white;">
+                            <button id="btn_convert_epub" style="background-color: #10b981;">Convert & Download SRT</button>
+                            <div id="epub_status" style="margin-top: 5px; font-weight: bold; font-size: 14px;"></div>
+                        </div>
+
                         <div class="radio-group">
                             <input type="radio" id="src_local" name="source" value="local" checked>
                             <label for="src_local" style="margin-right: 20px;">📁 Local Folder</label>
@@ -179,6 +309,52 @@ class AudioHandler(http.server.SimpleHTTPRequestHandler):
                         let lastCmdId = '0';
                         let isLoaded = false;
                         let currentLibraryItems = {}; 
+                        
+                        // ===== EPUB TO SRT FRONTEND LOGIC =====
+                        document.getElementById('btn_convert_epub').addEventListener('click', () => {
+                            const fileInput = document.getElementById('epub_upload');
+                            const statusDiv = document.getElementById('epub_status');
+                            
+                            if (!fileInput.files.length) {
+                                statusDiv.innerText = "❌ Please select an EPUB file first.";
+                                statusDiv.style.color = "red";
+                                return;
+                            }
+                            
+                            const file = fileInput.files[0];
+                            statusDiv.innerText = "⏳ Processing " + file.name + "... Please wait.";
+                            statusDiv.style.color = "blue";
+                            
+                            fetch('/upload_epub?filename=' + encodeURIComponent(file.name), {
+                                method: 'POST',
+                                body: file
+                            })
+                            .then(res => {
+                                if (!res.ok) {
+                                    return res.text().then(text => { throw new Error(text || "Server error"); });
+                                }
+                                return res.blob();
+                            })
+                            .then(blob => {
+                                // Create a hidden link to trigger the download instantly
+                                const url = window.URL.createObjectURL(blob);
+                                const a = document.createElement('a');
+                                a.href = url;
+                                a.download = file.name.replace('.epub', '') + '.srt';
+                                document.body.appendChild(a);
+                                a.click();
+                                a.remove();
+                                window.URL.revokeObjectURL(url);
+                                
+                                statusDiv.innerText = "✅ Subtitles successfully extracted and downloaded!";
+                                statusDiv.style.color = "green";
+                            })
+                            .catch(err => {
+                                statusDiv.innerText = "❌ Error: " + err.message;
+                                statusDiv.style.color = "red";
+                            });
+                        });
+                        // ======================================
                         
                         function updateSections() {
                             secLocal.style.display = radioLocal.checked ? 'block' : 'none';
