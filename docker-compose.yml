@@ -12,7 +12,9 @@ services:
       # We only need to map the audios folder now
       - /DATA/AppData/kindle-sync/audios:/app/audios
     working_dir: /app
+    # UPDATE: Added 'pip install beautifulsoup4 lxml' before downloading the server.py
     command: >
-      sh -c "python -c \"import urllib.request; urllib.request.urlretrieve('https://raw.githubusercontent.com/fvelsg/srt-player-koreader/main/server.py', 'server.py')\" 
+      sh -c "pip install beautifulsoup4 lxml &&
+      python -c \"import urllib.request; urllib.request.urlretrieve('https://raw.githubusercontent.com/fvelsg/srt-player-koreader/main/server.py', 'server.py')\" 
       && python -u server.py"
     restart: unless-stopped
