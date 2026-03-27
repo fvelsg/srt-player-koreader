@@ -7,8 +7,9 @@ import glob
 import shutil
 import zipfile
 import mimetypes
+import subprocess
 from urllib.parse import urlparse, parse_qs
-from bs4 import BeautifulSoup  # Added from your script
+from bs4 import BeautifulSoup  
 
 PORT = 8000
 AUDIO_DIR = "audios"
@@ -732,12 +733,16 @@ class AudioHandler(http.server.SimpleHTTPRequestHandler):
                                         "name": f"☁️ {ep_title}{date_str} (Not Downloaded)"
                                     })
                     elif audio_files:
-                        for i, af in enumerate(audio_files):
-                            filename = af.get('metadata', {}).get('filename', f"Part {i+1}")
+                        if len(audio_files) == 1:
                             parts.append({
                                 "type": "file",
-                                "ino": af.get('ino', ''),
-                                "name": f"File: {filename}"
+                                "ino": audio_files[0].get('ino', ''),
+                                "name": "📚 Full Audiobook"
+                            })
+                        else:
+                            parts.append({
+                                "type": "download",
+                                "name": f"📚 Full Audiobook (Combined from {len(audio_files)} files)"
                             })
                     else:
                         parts.append({
@@ -815,7 +820,7 @@ class AudioHandler(http.server.SimpleHTTPRequestHandler):
                                 if 'mp4' in ctype or 'm4b' in ctype or 'm4a' in ctype: ext = '.m4b'
                             
                             if ext == '.zip':
-                                print(f"[ABS] ZIP archive detected! Extracting the specific M4B/MP3...")
+                                print(f"[ABS] ZIP archive detected! Extracting and combining multiple files...")
                                 temp_zip_filename = f"{cache_prefix}_temp.zip"
                                 temp_zip_filepath = os.path.join(AUDIO_DIR, temp_zip_filename)
                                 
@@ -836,14 +841,44 @@ class AudioHandler(http.server.SimpleHTTPRequestHandler):
                                             
                                 if not extracted_audios: raise Exception("No audio files inside the ZIP.")
                                     
-                                extracted_audios.sort()
-                                target_file = extracted_audios[0] 
-                                _, final_ext = os.path.splitext(target_file)
+                                extracted_audios.sort() # Ensure correct chronological order
                                 
-                                temp_filename = f"{cache_prefix}{final_ext.lower()}"
-                                final_filepath = os.path.join(AUDIO_DIR, temp_filename)
-                                shutil.move(target_file, final_filepath)
+                                if len(extracted_audios) == 1:
+                                    target_file = extracted_audios[0] 
+                                    _, final_ext = os.path.splitext(target_file)
+                                    temp_filename = f"{cache_prefix}{final_ext.lower()}"
+                                    final_filepath = os.path.join(AUDIO_DIR, temp_filename)
+                                    shutil.move(target_file, final_filepath)
+                                else:
+                                    # We have multiple files! Combine them into ONE BIG AUDIO.
+                                    _, final_ext = os.path.splitext(extracted_audios[0])
+                                    temp_filename = f"{cache_prefix}_combined{final_ext.lower()}"
+                                    final_filepath = os.path.join(AUDIO_DIR, temp_filename)
+                                    
+                                    print(f"[ABS] Combining {len(extracted_audios)} files into {temp_filename}...")
+                                    
+                                    concat_list_path = os.path.join(extract_dir, "concat_list.txt")
+                                    with open(concat_list_path, "w", encoding="utf-8") as cl:
+                                        for audio_file in extracted_audios:
+                                            # Ensure paths are safe for the ffmpeg demuxer across OS environments
+                                            safe_path = audio_file.replace('\\', '/')
+                                            cl.write(f"file '{safe_path}'\n")
+                                            
+                                    try:
+                                        # Use ffmpeg concat demuxer to stitch files instantly without re-encoding
+                                        subprocess.run(['ffmpeg', '-f', 'concat', '-safe', '0', '-i', concat_list_path, '-c', 'copy', final_filepath], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                        print("[ABS] FFmpeg combination successful!")
+                                    except FileNotFoundError:
+                                        print("[!] ffmpeg not found! Falling back to raw binary concatenation (may cause duration bugs in M4A/M4B).")
+                                        with open(final_filepath, 'wb') as outfile:
+                                            for audio_file in extracted_audios:
+                                                with open(audio_file, 'rb') as infile:
+                                                    shutil.copyfileobj(infile, outfile)
+                                    except subprocess.CalledProcessError as e:
+                                        print(f"[!] ffmpeg failed: {e}. Falling back to keeping the first file only.")
+                                        shutil.move(extracted_audios[0], final_filepath)
                                 
+                                # Clean up temporary extraction folder and zip
                                 try:
                                     shutil.rmtree(extract_dir)
                                     os.remove(temp_zip_filepath)
