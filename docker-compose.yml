@@ -6,7 +6,7 @@ services:
     network_mode: "host"
     environment:
       # ZimaOS will turn these into UI fields!
-      - ABS_URL=http://localhost:13378
+      - ABS_URL=http://127.0.0.1:13378
       - ABS_TOKEN=paste_your_token_here
     volumes:
       # We only need to map the audios folder now
